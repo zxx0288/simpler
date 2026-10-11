@@ -13,6 +13,10 @@
  * @file dep_compute.h
  * @brief Dependency computation primitives for runtime submit_task.
  *
+ * These answer one question about a task being submitted: what must it wait
+ * for? Every input the task reads was produced by an earlier task, and this
+ * header finds those producers so the submit path can record the waits.
+ *
  * Two header-only template entry points:
  *
  *   compute_task_fanin     — STEP 3 in submit_task: per-tensor creator retention (Step A)
@@ -59,7 +63,9 @@
 #include "tensor.h"
 
 /**
- * View struct for inputs to compute_task_fanin / register_task_outputs.
+ * View struct for inputs to compute_task_fanin / register_task_outputs: the
+ * submitted task's tensors and their tags, plus any caller-declared explicit
+ * dependencies.
  *
  * Both runtime and replay assemble one of these from their own data sources
  * (runtime: from Arg accessors; replay: from SubmitTraceEntry fields). All
@@ -83,8 +89,13 @@ struct NoDepAnnotate {
 };
 
 /**
- * Compute fanin for a task being submitted (STEP 3: Step A creator retention +
- * Step B tensormap modifier lookup).
+ * Find every producer a task being submitted must wait for (STEP 3: Step A
+ * creator retention + Step B tensormap modifier lookup).
+ *
+ * In pipeline terms: wait for whoever created each existing tensor, and — for
+ * INPUT/INOUT — also for whoever last wrote it. Each producer is reported to
+ * `emit`; what recording a wait means is the caller's — the runtime appends it
+ * to the task's fanin.
  *
  * For each non-OUTPUT tensor:
  *   - If owner_task_id is valid, emit(owner)
@@ -149,7 +160,8 @@ template <typename Emit, typename Annotate = NoDepAnnotate>
 }
 
 /**
- * Register a task's outputs in the tensormap (STEP 4 in submit_task).
+ * Make this task's writes visible to later submissions: register its outputs
+ * in the tensormap (STEP 4 in submit_task).
  *
  * For INOUT and OUTPUT_EXISTING tensors (excluding manual_dep), inserts the
  * tensor into tensor_map keyed by its buffer.addr with `task_id` as producer.

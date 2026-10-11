@@ -208,6 +208,10 @@ static bool fanin_mark_seen(OrchestratorState &orch, TaskId producer_task_id) {
     return false;
 }
 
+// The fanin list's single write entry: records one producer as a wait of the
+// task being submitted. Idempotent — a producer already recorded under the
+// current submission returns true without a second entry.
+//
 // Polling: fanin is a flat array of position-independent producer local ids in the
 // payload's own fanin region (no dep-pool spill, no producer pointers), deduped
 // against the current fanin_seen epoch and hard-capped at CHIP_MAX_FANIN.
