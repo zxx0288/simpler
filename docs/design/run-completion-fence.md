@@ -101,6 +101,31 @@ depth is one. Launch errors are thrown before returning instead of being deferre
 to the handle. Without a caller stream, the existing prepared-successor behavior
 is unchanged.
 
+Native `ChipWorker::register_callable(image, size)` (Python
+`_ChipWorker.register_callable(callable)`) returns a runtime-assigned ID on an
+initialized PROGRAM or KERNEL worker. PROGRAM uses the optional
+`simpler_register_callable_v2` symbol; KERNEL uses the versioned kernel prepare
+entry. Explicit-ID `register_callable(id, callable)` remains available and
+shares the registry. Older runtimes without the required optional entry reject
+auto-ID registration explicitly. Neither overload initializes the worker.
+The public Python `ChipWorker` wrapper retains its existing CallableHandle API.
+
+`ChipWorker::prepare_kernel_callable(image, size)` (Python takes a ChipCallable)
+uses the distinct `simpler_kernel_mode_prepare_callable_v2` symbol to allocate
+an unused ID from the runtime's existing registry and share the legacy
+caller-ID preparation path. Both entries share the same ID namespace and image-buffer cache;
+equal images receive distinct IDs, with upload sharing governed by that cache.
+Failure leaves the output ID at -1 and preserves the runtime's existing cleanup
+ownership. ID exhaustion returns INVALID_STATE. IDs can be reused after explicit
+unregistration, so callers retire all users first and discard stale IDs. Registry
+mutation must be serialized against other operations on that handle, including
+legacy calls and close. The entry does not add registry-level synchronization.
+An older runtime without v2 can still initialize and use its existing APIs;
+requesting auto-ID preparation raises an unsupported-entry error. The old C
+symbol's signature and kernel-mode capability bit remain unchanged. Adapters
+must explicitly select v2; an integration-branch binary expecting a different
+signature under the old symbol cannot be loaded as if it were compatible.
+
 The stream is recorded on that run, including a declined join's ordinary-launch
 fallback. Poll/wait/finalize and argument borrows remain the lane's existing
 lifecycle. Caller ordering covers device work; Program host output copy-back
@@ -115,6 +140,22 @@ rejects SDMA/simulator options. Both onboard ownership policies manage internal
 workspace and accept the same optional byte budget. Its config is the native
 admission input; each submission still supplies its own config. Generation is retained in the native environment
 binding; public Worker forwards it on the direct L2 onboard route.
+
+Execution mode is latched per native device-context handle, not per process or
+submission. This handle identifies the C++ runner; it is not the borrowed
+ACL/RTS current-context handle. `ExecutionModeLatch::latched_mode()` returns an
+optional identity snapshot: empty means unclaimed, not PROGRAM. Identity,
+initialization phase and resource retirement are separate facts. The latch mutex
+serializes identity claims only; callers serialize native init/finalize/destroy
+against operations using that handle. Concurrent claims cannot choose different
+identities, but this does not make concurrent runner initialization supported.
+A successful mode claim is never undone by finalize or a later initialization
+failure. The same handle cannot switch between PROGRAM and
+KERNEL; a finalized PROGRAM handle can initialize as PROGRAM again only when
+its cleanup proof permits it. This C ABI permission does not apply to
+`ChipWorker`, which rejects reinitialization after finalize. Borrowed submissions
+use the shared native run machinery, so sharing prepare/launch functions is not
+a mode violation.
 
 ChipWorker retains a host-only environment identity from native context creation
 through successful teardown: process, non-repeating incarnation, nonzero logical

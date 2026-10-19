@@ -77,6 +77,7 @@ extern "C" {
 #endif
 
 typedef void *RuntimeHandle;
+/** Opaque simpler runner handle, not an ACL/RTS current-context handle. */
 typedef void *DeviceContextHandle;
 
 /**
@@ -534,6 +535,10 @@ const PipelineContract *get_pipeline_contract(void);
 /**
  * Create a new device context (heap-allocated DeviceRunner).
  * Each ChipWorker should own one context for the lifetime of its init→finalize cycle.
+ * The caller serializes init/finalize/destroy against other operations on this
+ * handle. The mode latch protects identity, not the runner's whole lifecycle.
+ * Finalize must establish resource retirement before destroy; the handle's
+ * immutable mode alone is not evidence that its resources can be released.
  * @return Opaque handle on success, NULL on failure.
  */
 DeviceContextHandle create_device_context(void);
@@ -900,6 +905,18 @@ int finalize_device(DeviceContextHandle ctx);
  *         range, upload/copy failure, or AICPU prewarm failure).
  */
 int simpler_register_callable(DeviceContextHandle ctx, int32_t callable_id, const void *callable);
+
+/**
+ * Register on an initialized PROGRAM or KERNEL context with an unused ID.
+ * KERNEL contexts use the versioned kernel preparation entry. The registry is
+ * shared with explicit-ID registration; exhaustion returns INVALID_STATE.
+ * Failure leaves *out_callable_id at -1 and cleanup ownership with the runtime.
+ * Callers serialize registry mutation against other operations and retire all
+ * users before unregistering an ID. An unregistered ID may be reused.
+ */
+int simpler_register_callable_v2(
+    DeviceContextHandle ctx, const void *callable, size_t callable_size, int32_t *out_callable_id
+);
 
 /**
  * Launch a callable previously staged via `simpler_register_callable`.
@@ -1355,6 +1372,21 @@ int simpler_kernel_mode_init(
  */
 int simpler_kernel_mode_prepare_callable(
     DeviceContextHandle ctx, int32_t callable_id, const void *callable, size_t callable_size
+);
+
+/**
+ * Allocate an unused callable ID using the caller-ID preparation path above.
+ * This distinct symbol preserves that entry's ABI. On failure *out_callable_id
+ * is -1; retained registrations remain owned by the runner until safe cleanup.
+ * Each success owns a distinct ID, even for equal images. Image-buffer sharing
+ * follows the runtime's existing cache. IDs may be reused after unregister;
+ * callers must retire all users before unregistering and discard stale IDs.
+ * Exhaustion returns PTO_RUNTIME_ERR_INVALID_STATE. Serialize registration and
+ * unregistration against other operations on this handle, including legacy
+ * calls and close. This entry does not add registry-level synchronization.
+ */
+int simpler_kernel_mode_prepare_callable_v2(
+    DeviceContextHandle ctx, const void *callable, size_t callable_size, int32_t *out_callable_id
 );
 
 /**

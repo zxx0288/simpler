@@ -979,6 +979,83 @@ static int record_callable_on_runner(
     return 0;
 }
 
+static int enter_kernel_callable_preparation(DeviceRunnerBase *runner) {
+    if (!runner->execution_mode_latch().is_kernel() || !runner->kernel_execution_state().accepts_dispatch())
+        return PTO_RUNTIME_ERR_INVALID_STATE;
+    return runner->enter_run_thread();
+}
+
+// The image is validated and the caller's borrowed context is current.
+static int prepare_kernel_callable_on_runner(DeviceRunnerBase *runner, int32_t callable_id, const void *callable) {
+    // prepare_kernel_callable's AICPU registration self-skips a callable
+    // whose orchestration was resolved host-side, so the flag it reports
+    // adds nothing here.
+    bool needs_aicpu_register = false;
+    int rc = record_callable_on_runner(runner, callable_id, callable, &needs_aicpu_register);
+    if (rc != 0) return rc;
+
+    rc = runner->prepare_kernel_callable(callable_id);
+    if (rc != 0) {
+        // Releasing the registration frees the device buffer holding the
+        // orchestration SO. That is only safe when preparation failed
+        // before anything on the device could read it: a registration whose
+        // wait failed or timed out leaves an AICPU task whose completion is
+        // not established, and poisons the context to say so. Keep the
+        // callable owned in that case — it is released at close, once the
+        // caller has established quiescence.
+        if (runner->kernel_execution_state().accepts_dispatch()) {
+            runner->unregister_callable(callable_id);
+        } else {
+            LOG_ERROR(
+                "simpler_kernel_mode_prepare_callable: retaining callable_id=%d — the context was poisoned while "
+                "device work on its image may still be outstanding",
+                callable_id
+            );
+        }
+        return rc;
+    }
+    return 0;
+}
+
+static int register_callable_auto_id(
+    DeviceContextHandle ctx, const void *callable, size_t callable_size, int32_t *out_callable_id, bool kernel_only
+) {
+    if (out_callable_id == nullptr) return PTO_RUNTIME_ERR_INVALID_ARGUMENT;
+    *out_callable_id = -1;
+    int rc = validate_kernel_prepare_callable_args(ctx, 0, callable, callable_size);
+    if (rc != 0) return rc;
+    rc = validate_kernel_callable_image(callable, callable_size);
+    if (rc != 0) return rc;
+    auto *runner = static_cast<DeviceRunnerBase *>(ctx);
+    const bool kernel = runner->execution_mode_latch().is_kernel();
+    if (kernel_only && !kernel) return PTO_RUNTIME_ERR_INVALID_STATE;
+    try {
+        if (kernel) {
+            rc = enter_kernel_callable_preparation(runner);
+            if (rc != 0) return rc;
+        } else if (!runner->execution_mode_latch().is_latched() || runner->device_id() < 0) {
+            return PTO_RUNTIME_ERR_INVALID_STATE;
+        }
+        for (int32_t id = 0; id < MAX_REGISTERED_CALLABLE_IDS; ++id) {
+            if (runner->has_callable(id)) continue;
+            rc = kernel ? prepare_kernel_callable_on_runner(runner, id, callable) :
+                          simpler_register_callable(ctx, id, callable);
+            if (rc == 0) *out_callable_id = id;
+            return rc;
+        }
+        LOG_ERROR("callable ID capacity exhausted");
+        return PTO_RUNTIME_ERR_INVALID_STATE;
+    } catch (...) {
+        return PTO_RUNTIME_ERR_INTERNAL;
+    }
+}
+
+int simpler_register_callable_v2(
+    DeviceContextHandle ctx, const void *callable, size_t callable_size, int32_t *out_callable_id
+) {
+    return register_callable_auto_id(ctx, callable, callable_size, out_callable_id, false);
+}
+
 int simpler_register_callable(DeviceContextHandle ctx, int32_t callable_id, const void *callable) {
     if (ctx == NULL || callable == NULL) return PTO_RUNTIME_ERR_INTERNAL;
     DeviceRunnerBase *runner = static_cast<DeviceRunnerBase *>(ctx);
@@ -2764,53 +2841,20 @@ int simpler_kernel_mode_prepare_callable(
     if (rc != 0) return rc;
     rc = validate_kernel_callable_image(callable, callable_size);
     if (rc != 0) return rc;
-
-    DeviceRunnerBase *runner = static_cast<DeviceRunnerBase *>(ctx);
-    if (!runner->execution_mode_latch().is_kernel()) {
-        LOG_ERROR("simpler_kernel_mode_prepare_callable: no live kernel context on this device context");
-        return PTO_RUNTIME_ERR_INVALID_STATE;
-    }
-    if (!runner->kernel_execution_state().accepts_dispatch()) {
-        LOG_ERROR("simpler_kernel_mode_prepare_callable: the kernel context no longer accepts preparation");
-        return PTO_RUNTIME_ERR_INVALID_STATE;
-    }
-
+    auto *runner = static_cast<DeviceRunnerBase *>(ctx);
     try {
-        // Registration uploads on the caller's device without rebinding it.
-        rc = runner->enter_run_thread();
+        rc = enter_kernel_callable_preparation(runner);
         if (rc != 0) return rc;
-
-        // prepare_kernel_callable's AICPU registration self-skips a callable
-        // whose orchestration was resolved host-side, so the flag it reports
-        // adds nothing here.
-        bool needs_aicpu_register = false;
-        rc = record_callable_on_runner(runner, callable_id, callable, &needs_aicpu_register);
-        if (rc != 0) return rc;
-
-        rc = runner->prepare_kernel_callable(callable_id);
-        if (rc != 0) {
-            // Releasing the registration frees the device buffer holding the
-            // orchestration SO. That is only safe when preparation failed
-            // before anything on the device could read it: a registration whose
-            // wait failed or timed out leaves an AICPU task whose completion is
-            // not established, and poisons the context to say so. Keep the
-            // callable owned in that case — it is released at close, once the
-            // caller has established quiescence.
-            if (runner->kernel_execution_state().accepts_dispatch()) {
-                runner->unregister_callable(callable_id);
-            } else {
-                LOG_ERROR(
-                    "simpler_kernel_mode_prepare_callable: retaining callable_id=%d — the context was poisoned while "
-                    "device work on its image may still be outstanding",
-                    callable_id
-                );
-            }
-            return rc;
-        }
-        return 0;
+        return prepare_kernel_callable_on_runner(runner, callable_id, callable);
     } catch (...) {
         return PTO_RUNTIME_ERR_INTERNAL;
     }
+}
+
+int simpler_kernel_mode_prepare_callable_v2(
+    DeviceContextHandle ctx, const void *callable, size_t callable_size, int32_t *out_callable_id
+) {
+    return register_callable_auto_id(ctx, callable, callable_size, out_callable_id, true);
 }
 
 int simpler_kernel_mode_launch(DeviceContextHandle ctx, int32_t callable_id, const void *args, void *caller_stream) {

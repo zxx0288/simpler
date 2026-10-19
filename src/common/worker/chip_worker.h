@@ -290,9 +290,15 @@ public:
      */
     void stop_chip_run_lane_admission() noexcept;
 
+    /// Prepare on a borrowed context with a runtime-assigned ID. Requires the
+    /// versioned prepare symbol; registry mutation and close are caller-serialized.
+    int32_t prepare_kernel_callable(const void *callable, size_t callable_size);
+
     // Per-callable_id preparation. Requires init() first and a callable_id
     // in [0, MAX_REGISTERED_CALLABLE_IDS) (cap 64).
     void register_callable(int32_t callable_id, const void *callable);
+    /// Register with a runtime-assigned ID in either initialization mode.
+    int32_t register_callable(const void *callable, size_t callable_size);
     void unregister_callable(int32_t callable_id);
 
     /// Number of distinct callable_ids the AICPU has been asked to dlopen for
@@ -556,6 +562,7 @@ private:
     using KernelSupportedFn = decltype(&simpler_kernel_mode_supported);
     using KernelInitFn = decltype(&simpler_kernel_mode_init);
     using KernelPrepareCallableFn = decltype(&simpler_kernel_mode_prepare_callable);
+    using KernelPrepareCallableV2Fn = decltype(&simpler_kernel_mode_prepare_callable_v2);
     using KernelLaunchFn = decltype(&simpler_kernel_mode_launch);
 
     struct CommSession {
@@ -591,6 +598,8 @@ private:
     GetDeviceMemoryInfoFn device_memory_info_fn_ = nullptr;
     SimplerInitFn simpler_init_fn_ = nullptr;
     SimplerRegisterCallableFn register_callable_fn_ = nullptr;
+    using SimplerRegisterCallableV2Fn = decltype(&simpler_register_callable_v2);
+    SimplerRegisterCallableV2Fn register_callable_v2_fn_ = nullptr;
     SimplerRunFn run_fn_ = nullptr;
     SimplerPrepareRunFn prepare_run_fn_ = nullptr;
     SimplerNativeRunFn launch_run_fn_ = nullptr;
@@ -674,6 +683,7 @@ private:
     KernelSupportedFn kernel_supported_fn_ = nullptr;
     KernelInitFn kernel_init_fn_ = nullptr;
     KernelPrepareCallableFn kernel_prepare_callable_fn_ = nullptr;
+    KernelPrepareCallableV2Fn kernel_prepare_callable_v2_fn_ = nullptr;
     KernelLaunchFn kernel_launch_fn_ = nullptr;
     void *device_ctx_ = nullptr;
     std::vector<CommSession> comm_sessions_;
