@@ -127,8 +127,8 @@ retire all users first and discard stale IDs. The registration and
 unregistration entry points serialize internally on the context, so an auto-ID
 scan and its claim cannot race an explicit-ID claim of the same slot; finalize
 takes the same lock, so teardown cannot clear the registry under a
-registration. Runs and initialization still rely on the caller contract. An
-older runtime without v2 can still initialize and use its
+registration. Runs, initialization and destroy still rely on the caller
+contract. An older runtime without v2 can still initialize and use its
 existing APIs; requesting auto-ID preparation raises an unsupported-entry
 error. The old C symbol's signature and kernel-mode capability bit remain
 unchanged. Adapters must explicitly select v2; an integration-branch binary

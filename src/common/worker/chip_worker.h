@@ -291,7 +291,9 @@ public:
     void stop_chip_run_lane_admission() noexcept;
 
     /// Prepare on a borrowed context with a runtime-assigned ID. Requires the
-    /// versioned prepare symbol; registry mutation and close are caller-serialized.
+    /// versioned prepare symbol; registration, unregistration and finalize
+    /// share the runner's lock, while runs, initialization and destroy remain
+    /// caller-serialized.
     int32_t prepare_kernel_callable(const void *callable, size_t callable_size);
 
     // Per-callable_id preparation. Requires init() first and a callable_id

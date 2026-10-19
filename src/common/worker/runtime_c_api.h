@@ -902,7 +902,7 @@ int finalize_device(DeviceContextHandle ctx);
  * on one context, so an auto-ID scan and the slot it claims are atomic with
  * respect to an explicit-ID claim of the same slot. `finalize_device` takes
  * the same lock, so teardown cannot clear the registry under a registration.
- * Runs and initialization still rely on the caller contract.
+ * Runs, initialization and destroy still rely on the caller contract.
  * =========================================================================== */
 
 /**
@@ -939,7 +939,8 @@ int simpler_register_callable(DeviceContextHandle ctx, int32_t callable_id, cons
  * MAX_REGISTERED_CALLABLE_IDS (64) slots; exhaustion returns INVALID_STATE.
  * Registration and unregistration serialize internally on the context, so
  * concurrent auto-ID and explicit-ID registration cannot claim the same slot.
- * They do not serialize against runs or close; callers still order those.
+ * finalize_device takes the same lock; runs, initialization and destroy do
+ * not, and callers still order those.
  * An explicit ID that is already registered is rejected with
  * INVALID_ARGUMENT; auto-ID never returns an occupied slot.
  * Failure leaves *out_callable_id at -1 and cleanup ownership with the runtime.
@@ -1415,8 +1416,9 @@ int simpler_kernel_mode_prepare_callable(
  * callers must retire all users before unregistering and discard stale IDs.
  * Exhaustion of the shared 64-slot table returns PTO_RUNTIME_ERR_INVALID_STATE.
  * Registration and unregistration serialize internally on this handle, so a
- * concurrent explicit-ID claim cannot take the slot this entry scans; they do
- * not serialize against runs or close, which callers still order.
+ * concurrent explicit-ID claim cannot take the slot this entry scans, and
+ * finalize_device takes the same lock. Runs, initialization and destroy are
+ * still caller-ordered.
  */
 int simpler_kernel_mode_prepare_callable_v2(
     DeviceContextHandle ctx, const void *callable, size_t callable_size, int32_t *out_callable_id
