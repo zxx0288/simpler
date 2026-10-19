@@ -1033,6 +1033,10 @@ static int prepare_kernel_callable_on_runner(
 static int
 prepare_kernel_callable_locked(DeviceRunnerBase *runner, int32_t callable_id, const void *callable, const char *entry) {
     try {
+        if (runner->native_runs_outstanding()) {
+            LOG_ERROR("%s: native run must be finalized before mutating the callable registry", entry);
+            return PTO_RUNTIME_ERR_INTERNAL;
+        }
         int rc = enter_kernel_callable_preparation(runner, entry);
         if (rc != 0) return rc;
         if (runner->has_callable(callable_id)) {
@@ -1082,8 +1086,7 @@ register_callable_locked(DeviceContextHandle ctx, int32_t callable_id, const voi
 }
 
 static int register_callable_auto_id(
-    DeviceContextHandle ctx, const void *callable, size_t callable_size, int32_t *out_callable_id, bool kernel_only,
-    const char *entry
+    DeviceContextHandle ctx, const void *callable, size_t callable_size, int32_t *out_callable_id, const char *entry
 ) {
     if (out_callable_id == nullptr) return PTO_RUNTIME_ERR_INVALID_ARGUMENT;
     *out_callable_id = -1;
@@ -1093,12 +1096,12 @@ static int register_callable_auto_id(
     if (rc != 0) return rc;
     auto *runner = static_cast<DeviceRunnerBase *>(ctx);
     const bool kernel = runner->execution_mode_latch().is_kernel();
-    if (kernel_only && !kernel) {
-        LOG_ERROR("%s: kernel callable preparation requires a kernel-mode context", entry);
-        return PTO_RUNTIME_ERR_INVALID_STATE;
-    }
     try {
         std::lock_guard<std::mutex> lock(runner->callable_registration_mutex());
+        if (runner->native_runs_outstanding()) {
+            LOG_ERROR("%s: native run must be finalized before mutating the callable registry", entry);
+            return PTO_RUNTIME_ERR_INTERNAL;
+        }
         if (!kernel && (!runner->execution_mode_latch().is_latched() || runner->device_id() < 0)) {
             LOG_ERROR("%s: callable registration requires an initialized PROGRAM context", entry);
             return PTO_RUNTIME_ERR_INVALID_STATE;
@@ -1123,9 +1126,7 @@ static int register_callable_auto_id(
 int simpler_register_callable_v2(
     DeviceContextHandle ctx, const void *callable, size_t callable_size, int32_t *out_callable_id
 ) {
-    return register_callable_auto_id(
-        ctx, callable, callable_size, out_callable_id, false, "simpler_register_callable_v2"
-    );
+    return register_callable_auto_id(ctx, callable, callable_size, out_callable_id, "simpler_register_callable_v2");
 }
 
 int simpler_register_callable(DeviceContextHandle ctx, int32_t callable_id, const void *callable) {
@@ -2894,14 +2895,6 @@ int simpler_kernel_mode_prepare_callable(
     auto *runner = static_cast<DeviceRunnerBase *>(ctx);
     std::lock_guard<std::mutex> lock(runner->callable_registration_mutex());
     return prepare_kernel_callable_locked(runner, callable_id, callable, "simpler_kernel_mode_prepare_callable");
-}
-
-int simpler_kernel_mode_prepare_callable_v2(
-    DeviceContextHandle ctx, const void *callable, size_t callable_size, int32_t *out_callable_id
-) {
-    return register_callable_auto_id(
-        ctx, callable, callable_size, out_callable_id, true, "simpler_kernel_mode_prepare_callable_v2"
-    );
 }
 
 int simpler_kernel_mode_launch(DeviceContextHandle ctx, int32_t callable_id, const void *args, void *caller_stream) {

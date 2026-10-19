@@ -412,10 +412,6 @@ void ChipWorker::init(
         kernel_init_fn = load_symbol<KernelInitFn>(handle, "simpler_kernel_mode_init");
         kernel_prepare_callable_fn =
             load_symbol<KernelPrepareCallableFn>(handle, "simpler_kernel_mode_prepare_callable");
-        // Optional on the same terms: an older runtime still resolves the
-        // legacy entry and simply lacks runtime-assigned IDs.
-        kernel_prepare_callable_v2_fn_ =
-            reinterpret_cast<KernelPrepareCallableV2Fn>(dlsym(handle, "simpler_kernel_mode_prepare_callable_v2"));
         kernel_launch_fn = load_symbol<KernelLaunchFn>(handle, "simpler_kernel_mode_launch");
     } catch (...) {
         throw;
@@ -841,7 +837,6 @@ void ChipWorker::clear_runtime_binding() {
     kernel_supported_fn_ = nullptr;
     kernel_init_fn_ = nullptr;
     kernel_prepare_callable_fn_ = nullptr;
-    kernel_prepare_callable_v2_fn_ = nullptr;
     kernel_launch_fn_ = nullptr;
     runtime_bufs_.clear();
     pipeline_generations_.reset();
@@ -850,22 +845,8 @@ void ChipWorker::clear_runtime_binding() {
     device_id_ = -1;
 }
 
-int32_t ChipWorker::prepare_kernel_callable(const void *callable, size_t callable_size) {
-    if (!initialized_ || !execution_environment_ || !execution_environment_->borrowed)
-        throw std::runtime_error("kernel preparation requires an initialized borrowed RTS context");
-    validate_execution_context();
-    if (kernel_prepare_callable_v2_fn_ == nullptr)
-        throw std::runtime_error("runtime does not support versioned kernel callable preparation");
-    int32_t id = -1;
-    const int rc = kernel_prepare_callable_v2_fn_(device_ctx_, callable, callable_size, &id);
-    if (rc != 0) throw std::runtime_error("kernel callable preparation failed with code " + std::to_string(rc));
-    return id;
-}
-
 int32_t ChipWorker::register_callable(const void *callable, size_t callable_size) {
     if (!initialized_) throw std::runtime_error("ChipWorker not initialized; call init() first");
-    if (execution_environment_ && execution_environment_->borrowed)
-        return prepare_kernel_callable(callable, callable_size);
     validate_execution_context();
     if (register_callable_v2_fn_ == nullptr)
         throw std::runtime_error("runtime does not support versioned callable registration");

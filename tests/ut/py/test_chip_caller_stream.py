@@ -66,7 +66,7 @@ def _prepare_callable(worker, contexts, callable_image):
     with contexts.other():
         for operation in (
             lambda: worker.register_callable(0, callable_image),
-            lambda: worker.prepare_kernel_callable(callable_image),
+            lambda: worker.register_callable(callable_image),
         ):
             with pytest.raises(ExecutionContextRefused, match="context validation failed"):
                 operation()

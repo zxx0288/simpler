@@ -290,12 +290,6 @@ public:
      */
     void stop_chip_run_lane_admission() noexcept;
 
-    /// Prepare on a borrowed context with a runtime-assigned ID. Requires the
-    /// versioned prepare symbol; registration, unregistration and finalize
-    /// share the runner's lock, while runs, initialization and destroy remain
-    /// caller-serialized.
-    int32_t prepare_kernel_callable(const void *callable, size_t callable_size);
-
     // Per-callable_id preparation. Requires init() first and a callable_id
     // in [0, MAX_REGISTERED_CALLABLE_IDS) (cap 64). An ID that is already
     // registered is rejected; unregister it before reuse.
@@ -565,7 +559,6 @@ private:
     using KernelSupportedFn = decltype(&simpler_kernel_mode_supported);
     using KernelInitFn = decltype(&simpler_kernel_mode_init);
     using KernelPrepareCallableFn = decltype(&simpler_kernel_mode_prepare_callable);
-    using KernelPrepareCallableV2Fn = decltype(&simpler_kernel_mode_prepare_callable_v2);
     using KernelLaunchFn = decltype(&simpler_kernel_mode_launch);
 
     struct CommSession {
@@ -686,7 +679,6 @@ private:
     KernelSupportedFn kernel_supported_fn_ = nullptr;
     KernelInitFn kernel_init_fn_ = nullptr;
     KernelPrepareCallableFn kernel_prepare_callable_fn_ = nullptr;
-    KernelPrepareCallableV2Fn kernel_prepare_callable_v2_fn_ = nullptr;
     KernelLaunchFn kernel_launch_fn_ = nullptr;
     void *device_ctx_ = nullptr;
     std::vector<CommSession> comm_sessions_;

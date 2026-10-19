@@ -49,8 +49,7 @@
  * Optional API — resolved opportunistically; a runtime built before these
  * entries simply lacks the capability, and ChipWorker raises an explicit error
  * when a caller requests it:
- *   - registration: simpler_register_callable_v2,
- *                   simpler_kernel_mode_prepare_callable_v2
+ *   - registration: simpler_register_callable_v2
  *
  * Native-run storage: caller allocates at least get_runtime_size() bytes with
  * get_runtime_alignment() alignment, zero-initializes it before first use, and
@@ -934,7 +933,7 @@ int simpler_register_callable(DeviceContextHandle ctx, int32_t callable_id, cons
 
 /**
  * Register on an initialized PROGRAM or KERNEL context with an unused ID.
- * KERNEL contexts use the versioned kernel preparation entry. The registry is
+ * KERNEL contexts use the kernel preparation path internally. The registry is
  * shared with explicit-ID registration, so both draw from the same
  * MAX_REGISTERED_CALLABLE_IDS (64) slots; exhaustion returns INVALID_STATE.
  * Registration and unregistration serialize internally on the context, so
@@ -1405,23 +1404,6 @@ int simpler_kernel_mode_init(
  */
 int simpler_kernel_mode_prepare_callable(
     DeviceContextHandle ctx, int32_t callable_id, const void *callable, size_t callable_size
-);
-
-/**
- * Allocate an unused callable ID using the caller-ID preparation path above.
- * This distinct symbol preserves that entry's ABI. On failure *out_callable_id
- * is -1; retained registrations remain owned by the runner until safe cleanup.
- * Each success owns a distinct ID, even for equal images. Image-buffer sharing
- * follows the runtime's existing cache. IDs may be reused after unregister;
- * callers must retire all users before unregistering and discard stale IDs.
- * Exhaustion of the shared 64-slot table returns PTO_RUNTIME_ERR_INVALID_STATE.
- * Registration and unregistration serialize internally on this handle, so a
- * concurrent explicit-ID claim cannot take the slot this entry scans, and
- * finalize_device takes the same lock. Runs, initialization and destroy are
- * still caller-ordered.
- */
-int simpler_kernel_mode_prepare_callable_v2(
-    DeviceContextHandle ctx, const void *callable, size_t callable_size, int32_t *out_callable_id
 );
 
 /**

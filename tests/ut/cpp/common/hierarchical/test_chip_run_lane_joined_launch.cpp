@@ -28,7 +28,6 @@
 #include <new>
 #include <string>
 #include <unordered_map>
-#include <unistd.h>
 #include <utility>
 #include <vector>
 
@@ -227,91 +226,6 @@ void prime_caller_streams(ChipWorker &worker) {
 }
 
 using Events = std::vector<std::string>;
-
-void prime_kernel_worker(ChipWorker &worker) {
-    prime_worker(worker);
-    prime_caller_streams(worker);
-    worker.execution_environment_ = ChipWorker::ExecutionEnvironment{static_cast<uint64_t>(getpid()), 1, 1, 0, true};
-    worker.run_lane_ = std::make_unique<ChipRunLane>(worker);
-}
-
-TEST(KernelPrepareTest, PublishesOnlySuccessfulIdsAndDoesNotRollbackRuntimeFailures) {
-    ChipWorker worker;
-    prime_kernel_worker(worker);
-    int image = 0;
-    EXPECT_THROW(worker.prepare_kernel_callable(&image, sizeof(image)), std::runtime_error);
-    worker.kernel_prepare_callable_v2_fn_ = [](void *, const void *, size_t, int32_t *out) {
-        *out = 7;
-        return 0;
-    };
-    EXPECT_EQ(worker.prepare_kernel_callable(&image, sizeof(image)), 7);
-    worker.kernel_prepare_callable_v2_fn_ = [](void *, const void *, size_t, int32_t *out) {
-        g_events.push_back("retained_registration");
-        *out = -1;
-        return -77;
-    };
-    worker.unregister_callable_fn_ = [](void *, int32_t) {
-        g_events.push_back("unregister");
-        return 0;
-    };
-    EXPECT_THROW(worker.prepare_kernel_callable(&image, sizeof(image)), std::runtime_error);
-    EXPECT_EQ(g_events, (Events{"retained_registration"}));
-    worker.execution_environment_->borrowed = false;
-    EXPECT_THROW(worker.prepare_kernel_callable(&image, sizeof(image)), std::runtime_error);
-    EXPECT_EQ(g_events, (Events{"retained_registration"}));
-}
-
-TEST(KernelPrepareTest, AutoRegistrationSelectsTheInitializedMode) {
-    ChipWorker worker;
-    int image = 0;
-    EXPECT_THROW(worker.register_callable(&image, sizeof(image)), std::runtime_error);
-    prime_kernel_worker(worker);
-    worker.execution_environment_->borrowed = false;
-    EXPECT_THROW(worker.register_callable(&image, sizeof(image)), std::runtime_error);
-    worker.register_callable_v2_fn_ = [](void *, const void *, size_t, int32_t *out) -> int {
-        *out = 11;
-        return 0;
-    };
-    worker.kernel_prepare_callable_v2_fn_ = [](void *, const void *, size_t, int32_t *out) {
-        *out = 23;
-        return 0;
-    };
-    EXPECT_EQ(worker.register_callable(&image, sizeof(image)), 11);
-    worker.register_callable_v2_fn_ = [](void *, const void *, size_t, int32_t *out) -> int {
-        *out = -1;
-        return PTO_RUNTIME_ERR_INVALID_STATE;
-    };
-    EXPECT_THROW(worker.register_callable(&image, sizeof(image)), std::runtime_error);
-    worker.execution_environment_->borrowed = true;
-    EXPECT_EQ(worker.register_callable(&image, sizeof(image)), 23);
-}
-
-TEST(KernelPrepareTest, RefusesInvalidOwnerBeforeCallingTheRuntime) {
-    ChipWorker worker;
-    int image = 0;
-    EXPECT_THROW(worker.prepare_kernel_callable(&image, sizeof(image)), std::runtime_error);
-    prime_kernel_worker(worker);
-    worker.kernel_prepare_callable_v2_fn_ = [](void *, const void *, size_t, int32_t *out) {
-        g_events.push_back("prepare_callable");
-        *out = 3;
-        return 0;
-    };
-    worker.execution_environment_->borrowed = false;
-    EXPECT_THROW(worker.prepare_kernel_callable(&image, sizeof(image)), std::runtime_error);
-    EXPECT_TRUE(g_events.empty());
-    worker.execution_environment_->borrowed = true;
-    int context_rc = PTO_RUNTIME_ERR_INVALID_STATE;
-    worker.device_ctx_ = &context_rc;
-    worker.validate_execution_context_fn_ = [](void *ctx) {
-        return *static_cast<int *>(ctx);
-    };
-    EXPECT_THROW(worker.prepare_kernel_callable(&image, sizeof(image)), ExecutionContextRefused);
-    EXPECT_TRUE(g_events.empty());
-    context_rc = 0;
-    EXPECT_EQ(worker.prepare_kernel_callable(&image, sizeof(image)), 3);
-    EXPECT_EQ(g_events, (Events{"prepare_callable"}));
-    worker.device_ctx_ = nullptr;
-}
 
 TEST(ChipRunLaneJoinedLaunchTest, CallerSubmitQueuesItsExitBeforeReturning) {
     ChipWorker worker;

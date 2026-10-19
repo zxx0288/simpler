@@ -186,14 +186,12 @@ def _load(arch: str, variant: str, runtime: str) -> ctypes.CDLL:
         ctypes.c_size_t,
     ]
     lib.simpler_kernel_mode_prepare_callable.restype = ctypes.c_int
-    lib.simpler_kernel_mode_prepare_callable_v2.argtypes = [
+    lib.simpler_register_callable_v2.argtypes = [
         ctypes.c_void_p,
         ctypes.c_void_p,
         ctypes.c_size_t,
         ctypes.POINTER(ctypes.c_int32),
     ]
-    lib.simpler_kernel_mode_prepare_callable_v2.restype = ctypes.c_int
-    lib.simpler_register_callable_v2.argtypes = lib.simpler_kernel_mode_prepare_callable_v2.argtypes
     lib.simpler_register_callable_v2.restype = ctypes.c_int
     lib.simpler_kernel_mode_launch.argtypes = [ctypes.c_void_p, ctypes.c_int32, ctypes.c_void_p, ctypes.c_void_p]
     lib.simpler_kernel_mode_launch.restype = ctypes.c_int
@@ -448,7 +446,7 @@ def _check_prepare_reuse(lib, ctx, arch, runtime, *, close=True):
     # Identical bytes deduplicate the callable upload. The second ID also
     # reuses the context's persistent argument blocks, so neither adds GM.
     auto_id = ctypes.c_int32(-1)
-    assert lib.simpler_kernel_mode_prepare_callable_v2(ctx, image, len(image), ctypes.byref(auto_id)) == 0
+    assert lib.simpler_register_callable_v2(ctx, image, len(image), ctypes.byref(auto_id)) == 0
     assert auto_id.value == 1
     assert lib.committed_device_memory_ctx(ctx) == prepared
     if close:
@@ -470,22 +468,6 @@ def test_kernel_entries_reject_a_context_with_no_kernel_claim(arch: str, runtime
         assert lib.simpler_kernel_mode_supported(ctx) == 0
         assert lib.simpler_kernel_mode_prepare_callable(ctx, 0, image, len(image)) == PTO_RUNTIME_ERR_INVALID_STATE
         assert lib.simpler_kernel_mode_launch(ctx, 0, image, stream) == PTO_RUNTIME_ERR_INVALID_STATE
-        out = ctypes.c_int32(999)
-        assert (
-            lib.simpler_kernel_mode_prepare_callable_v2(ctx, image, len(image), ctypes.byref(out))
-            == PTO_RUNTIME_ERR_INVALID_STATE
-        )
-        assert out.value == -1
-        assert (
-            lib.simpler_kernel_mode_prepare_callable_v2(ctx, image, len(image), None)
-            == PTO_RUNTIME_ERR_INVALID_ARGUMENT
-        )
-        out.value = 999
-        assert (
-            lib.simpler_kernel_mode_prepare_callable_v2(ctx, image, 1, ctypes.byref(out))
-            == PTO_RUNTIME_ERR_INVALID_ARGUMENT
-        )
-        assert out.value == -1
         # An out-of-range callable id and a truncated image are argument
         # errors, so the structural checks run before the ordering one.
         assert lib.simpler_kernel_mode_prepare_callable(ctx, -1, image, len(image)) == PTO_RUNTIME_ERR_INVALID_ARGUMENT
@@ -726,7 +708,7 @@ def test_program_auto_registration_is_thread_safe(arch, runtime):
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def _run_auto_prepare(arch, runtime, device, *, generic=False):
+def _run_auto_prepare(arch, runtime, device):
     lib = _load(arch, "onboard", runtime)
     lib.rtSetDevice.argtypes = [ctypes.c_int]
     assert lib.rtSetDevice(device) == 0
@@ -737,8 +719,7 @@ def _run_auto_prepare(arch, runtime, device, *, generic=False):
     config = CallConfig()
     image = _prepared_callable_image(arch, runtime)
     out = ctypes.c_int32(999)
-
-    entry = lib.simpler_register_callable_v2 if generic else lib.simpler_kernel_mode_prepare_callable_v2
+    entry = lib.simpler_register_callable_v2
 
     def prepare():
         out.value = 999
@@ -798,8 +779,7 @@ def _run_auto_prepare(arch, runtime, device, *, generic=False):
         for runtime in _RUNTIMES
     ],
 )
-@pytest.mark.parametrize("generic", [False, True])
-def test_versioned_prepare_allocates_ids_without_replacing_legacy_entries(arch, runtime, request, generic):
+def test_versioned_registration_allocates_ids_without_replacing_legacy_entries(arch, runtime, request):
     device = str(request.config.getoption("--device")).split("-")[0].split(",")[0]
     result = subprocess.run(
         [
@@ -808,7 +788,7 @@ def test_versioned_prepare_allocates_ids_without_replacing_legacy_entries(arch, 
             arch,
             runtime,
             device,
-            "auto_register" if generic else "auto_prepare",
+            "auto_register",
         ],
         capture_output=True,
         text=True,
@@ -1560,8 +1540,8 @@ if __name__ == "__main__":
         _run_program_auto_register(sys.argv[1], sys.argv[2])
     elif sys.argv[4] == "program_auto_register_threads":
         _run_program_auto_register_threads(sys.argv[1], sys.argv[2])
-    elif sys.argv[4] in ("auto_prepare", "auto_register"):
-        _run_auto_prepare(sys.argv[1], sys.argv[2], int(sys.argv[3]), generic=sys.argv[4] == "auto_register")
+    elif sys.argv[4] == "auto_register":
+        _run_auto_prepare(sys.argv[1], sys.argv[2], int(sys.argv[3]))
     elif sys.argv[4].startswith("mode_"):
         _run_mode_isolation(sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4][len("mode_") :])
     elif sys.argv[4] in ("public_prepare_retry", "public_launch_retry"):

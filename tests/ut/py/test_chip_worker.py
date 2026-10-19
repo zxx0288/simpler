@@ -1415,20 +1415,6 @@ class TestChipWorkerBorrowedInit:
         finally:
             worker.finalize()
 
-    def test_versioned_prepare_refuses_older_runtime_without_changing_binding(self, kernel_symbol_runtime):
-        runtime = kernel_symbol_runtime(borrowed=True)
-        worker = _ChipWorker()
-        worker.init(str(runtime), os.devnull, os.devnull, "", 0, borrowed_context_generation=77)
-        environment = worker._execution_environment
-        try:
-            callable_image = ChipCallable.build(signature=[], func_name="test", binary=b"\x00", children=[])
-            with pytest.raises(RuntimeError, match="does not support versioned"):
-                worker.prepare_kernel_callable(callable_image)
-            assert worker.initialized
-            assert worker._execution_environment == environment
-        finally:
-            worker.finalize()
-
     def test_borrowed_init_uses_shared_binding_and_can_close(self, kernel_symbol_runtime):
         runtime = kernel_symbol_runtime(borrowed=True)
         observer = ctypes.CDLL(str(runtime))

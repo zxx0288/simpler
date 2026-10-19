@@ -823,10 +823,18 @@ int simpler_register_callable_v2(
     rc = validate_kernel_callable_image(callable, callable_size);
     if (rc != 0) return rc;
     auto *runner = static_cast<SimDeviceRunnerBase *>(ctx);
-    if (runner->execution_mode_latch().is_kernel())
-        return simpler_kernel_mode_prepare_callable_v2(ctx, callable, callable_size, out_callable_id);
     try {
         std::lock_guard<std::mutex> lock(runner->callable_registration_mutex());
+        if (runner->execution_mode_latch().is_kernel()) {
+            LOG_ERROR("simpler_register_callable_v2: kernel mode is not supported by the simulator");
+            return PTO_RUNTIME_ERR_INVALID_STATE;
+        }
+        if (runner->native_run_active()) {
+            LOG_ERROR(
+                "simpler_register_callable_v2: native run must be finalized before mutating the callable registry"
+            );
+            return PTO_RUNTIME_ERR_INTERNAL;
+        }
         if (!runner->execution_mode_latch().is_latched() || runner->device_id() < 0) {
             LOG_ERROR("simpler_register_callable_v2: callable registration requires an initialized PROGRAM context");
             return PTO_RUNTIME_ERR_INVALID_STATE;
@@ -1502,17 +1510,6 @@ int simpler_kernel_mode_prepare_callable(
     const int rc = validate_kernel_prepare_callable_args(ctx, callable_id, callable, callable_size);
     if (rc != 0) return rc;
     LOG_ERROR("simpler_kernel_mode_prepare_callable: no live kernel context on this device context");
-    return PTO_RUNTIME_ERR_INVALID_STATE;
-}
-
-int simpler_kernel_mode_prepare_callable_v2(
-    DeviceContextHandle ctx, const void *callable, size_t callable_size, int32_t *out_callable_id
-) {
-    if (out_callable_id == nullptr) return PTO_RUNTIME_ERR_INVALID_ARGUMENT;
-    *out_callable_id = -1;
-    int rc = validate_kernel_prepare_callable_args(ctx, 0, callable, callable_size);
-    if (rc != 0) return rc;
-    LOG_ERROR("simpler_kernel_mode_prepare_callable_v2: kernel mode is not supported by the simulator");
     return PTO_RUNTIME_ERR_INVALID_STATE;
 }
 

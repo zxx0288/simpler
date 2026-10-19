@@ -3665,15 +3665,6 @@ NB_MODULE(_task_interface, m) {
             "A no-op unless the worker was initialized with collect_across_runs=True."
         )
         .def(
-            "prepare_kernel_callable",
-            [](ChipWorker &self, const PyChipCallable &callable) {
-                return self.prepare_kernel_callable(callable.buffer_.data(), callable.buffer_.size());
-            },
-            nb::arg("callable"), nb::call_guard<nb::gil_scoped_release>(),
-            "Prepare a callable on a borrowed context and return a runtime-assigned ID. "
-            "Requires the versioned prepare API; retire users before unregistering the ID."
-        )
-        .def(
             "register_callable",
             [](ChipWorker &self, const PyChipCallable &callable) {
                 return self.register_callable(callable.buffer_.data(), callable.buffer_.size());
