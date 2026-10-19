@@ -642,6 +642,8 @@ def _run_program_auto_register(arch, runtime):
     )
     try:
         worker.register_callable(0, callable_image)
+        with pytest.raises(RuntimeError, match="code -1004"):
+            worker.register_callable(0, callable_image)
         for expected in range(1, 64):
             assert worker.register_callable(callable_image) == expected
         with pytest.raises(RuntimeError, match="registration failed"):
@@ -654,11 +656,68 @@ def _run_program_auto_register(arch, runtime):
         worker.register_callable(callable_image)
 
 
+def _run_program_auto_register_threads(arch, runtime):
+    import threading  # noqa: PLC0415
+
+    from _task_interface import _ChipWorker  # noqa: PLC0415
+    from simpler.task_interface import ChipCallable  # noqa: PLC0415
+
+    base = _PROJECT_ROOT / "build" / "lib" / arch / "sim" / runtime
+    image = _prepared_callable_image(arch + "sim", runtime)
+    callable_image = ChipCallable.from_bytes(image)
+    worker = _ChipWorker()
+    worker.init(
+        str(base / "libhost_runtime.so"),
+        str(base / "libaicpu_kernel.so"),
+        str(base / "libaicore_kernel.so"),
+        "",
+        0,
+        sim_context_path=str(_PROJECT_ROOT / "build" / "lib" / "libcpu_sim_context.so"),
+    )
+    try:
+        ids = []
+        failures = []
+        guard = threading.Lock()
+
+        def register():
+            try:
+                callable_id = worker.register_callable(callable_image)
+            except BaseException as exc:  # noqa: BLE001
+                with guard:
+                    failures.append(exc)
+                return
+            with guard:
+                ids.append(callable_id)
+
+        threads = [threading.Thread(target=register) for _ in range(16)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        assert not failures, failures
+        assert sorted(ids) == list(range(len(threads)))
+    finally:
+        worker.finalize()
+
+
 @pytest.mark.parametrize(("arch", "runtime"), _SIM_CASES)
 def test_program_auto_registration_shares_legacy_ids(arch, runtime):
     _load(arch, "sim", runtime)
     result = subprocess.run(
         [sys.executable, str(Path(__file__).resolve()), arch, runtime, "0", "program_auto_register"],
+        capture_output=True,
+        text=True,
+        timeout=240,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize(("arch", "runtime"), _SIM_CASES)
+def test_program_auto_registration_is_thread_safe(arch, runtime):
+    _load(arch, "sim", runtime)
+    result = subprocess.run(
+        [sys.executable, str(Path(__file__).resolve()), arch, runtime, "0", "program_auto_register_threads"],
         capture_output=True,
         text=True,
         timeout=240,
@@ -1499,6 +1558,8 @@ def test_pre_execution_refusal_retries_through_public_worker(
 if __name__ == "__main__":
     if sys.argv[4] == "program_auto_register":
         _run_program_auto_register(sys.argv[1], sys.argv[2])
+    elif sys.argv[4] == "program_auto_register_threads":
+        _run_program_auto_register_threads(sys.argv[1], sys.argv[2])
     elif sys.argv[4] in ("auto_prepare", "auto_register"):
         _run_auto_prepare(sys.argv[1], sys.argv[2], int(sys.argv[3]), generic=sys.argv[4] == "auto_register")
     elif sys.argv[4].startswith("mode_"):

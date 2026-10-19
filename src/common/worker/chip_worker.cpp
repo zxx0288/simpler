@@ -294,6 +294,8 @@ void ChipWorker::init(
         get_runtime_alignment_fn_ = load_symbol<GetRuntimeAlignmentFn>(handle, "get_runtime_alignment");
         simpler_init_fn_ = load_symbol<SimplerInitFn>(handle, "simpler_init");
         register_callable_fn_ = load_symbol<SimplerRegisterCallableFn>(handle, "simpler_register_callable");
+        // Optional: a runtime built before versioned registration exports
+        // nothing, and a null pointer is the refusal.
         register_callable_v2_fn_ =
             reinterpret_cast<SimplerRegisterCallableV2Fn>(dlsym(handle, "simpler_register_callable_v2"));
         run_fn_ = load_symbol<SimplerRunFn>(handle, "simpler_run");
@@ -375,11 +377,12 @@ void ChipWorker::init(
         get_run_stream_set_create_count_fn_ =
             load_symbol<GetAicpuDlopenCountFn>(handle, "get_run_stream_set_create_count");
         finalize_device_fn_ = load_symbol<FinalizeDeviceFn>(handle, "finalize_device");
-        // ACL lifecycle + comm_* + kernel mode are part of the uniform
-        // host_runtime.so ABI. Every platform runtime exports all of them —
-        // a runtime without a real backend (today: a5 for comm) ships
+        // ACL lifecycle + comm_* + the required kernel-mode entries are part of
+        // the uniform host_runtime.so ABI. Every platform runtime exports all of
+        // them — a runtime without a real backend (today: a5 for comm) ships
         // not-supported stubs rather than omitting the symbols, so these groups
-        // resolve unconditionally and never half-load.
+        // resolve unconditionally and never half-load. The versioned
+        // registration entries below are optional on purpose.
         //
         // simpler_kernel_mode_supported does not answer which runtime has a
         // kernel backend: it answers whether kernel-mode launches are
@@ -409,6 +412,8 @@ void ChipWorker::init(
         kernel_init_fn = load_symbol<KernelInitFn>(handle, "simpler_kernel_mode_init");
         kernel_prepare_callable_fn =
             load_symbol<KernelPrepareCallableFn>(handle, "simpler_kernel_mode_prepare_callable");
+        // Optional on the same terms: an older runtime still resolves the
+        // legacy entry and simply lacks runtime-assigned IDs.
         kernel_prepare_callable_v2_fn_ =
             reinterpret_cast<KernelPrepareCallableV2Fn>(dlsym(handle, "simpler_kernel_mode_prepare_callable_v2"));
         kernel_launch_fn = load_symbol<KernelLaunchFn>(handle, "simpler_kernel_mode_launch");

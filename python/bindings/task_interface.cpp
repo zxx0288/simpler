@@ -3669,7 +3669,7 @@ NB_MODULE(_task_interface, m) {
             [](ChipWorker &self, const PyChipCallable &callable) {
                 return self.prepare_kernel_callable(callable.buffer_.data(), callable.buffer_.size());
             },
-            nb::arg("callable"),
+            nb::arg("callable"), nb::call_guard<nb::gil_scoped_release>(),
             "Prepare a callable on a borrowed context and return a runtime-assigned ID. "
             "Requires the versioned prepare API; retire users before unregistering the ID."
         )
@@ -3678,7 +3678,7 @@ NB_MODULE(_task_interface, m) {
             [](ChipWorker &self, const PyChipCallable &callable) {
                 return self.register_callable(callable.buffer_.data(), callable.buffer_.size());
             },
-            nb::arg("callable"),
+            nb::arg("callable"), nb::call_guard<nb::gil_scoped_release>(),
             "Register on an initialized worker and return a runtime-assigned ID. "
             "Supports owned and borrowed contexts; retire users before unregistering."
         )

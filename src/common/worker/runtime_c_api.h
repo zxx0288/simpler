@@ -46,6 +46,12 @@
  *   - comm:         comm_init, comm_alloc_windows, comm_get_local_window_base,
  *                   comm_get_window_size, comm_barrier, comm_destroy
  *
+ * Optional API — resolved opportunistically; a runtime built before these
+ * entries simply lacks the capability, and ChipWorker raises an explicit error
+ * when a caller requests it:
+ *   - registration: simpler_register_callable_v2,
+ *                   simpler_kernel_mode_prepare_callable_v2
+ *
  * Native-run storage: caller allocates at least get_runtime_size() bytes with
  * get_runtime_alignment() alignment, zero-initializes it before first use, and
  * keeps its address stable from prepare through finalize. After finalize the
@@ -537,6 +543,8 @@ const PipelineContract *get_pipeline_contract(void);
  * Each ChipWorker should own one context for the lifetime of its init→finalize cycle.
  * The caller serializes init/finalize/destroy against other operations on this
  * handle. The mode latch protects identity, not the runner's whole lifecycle.
+ * finalize_device is additionally serialized against callable registration and
+ * unregistration; initialization and destroy are not.
  * Finalize must establish resource retirement before destroy; the handle's
  * immutable mode alone is not evidence that its resources can be released.
  * @return Opaque handle on success, NULL on failure.
@@ -881,6 +889,20 @@ int finalize_device(DeviceContextHandle ctx);
  * resident until finalize regardless. Register and unregister mutate state
  * referenced by a prepared run, so both are rejected from successful prepare
  * until its matching finalize.
+ *
+ * The table is a slot array on both host and AICPU, and the slot number is
+ * the callable_id itself. A registration occupies one slot until
+ * `unregister_callable`; a later registration may reuse it. Capacity is a
+ * slot count, not a memory budget: with all 64 slots occupied, explicit and
+ * auto-ID registration both fail until an ID is unregistered, and a consumer
+ * whose working set exceeds 64 resident callables must recycle IDs or raise
+ * the table size on both sides in a protocol change.
+ *
+ * Registration and unregistration entry points serialize against each other
+ * on one context, so an auto-ID scan and the slot it claims are atomic with
+ * respect to an explicit-ID claim of the same slot. `finalize_device` takes
+ * the same lock, so teardown cannot clear the registry under a registration.
+ * Runs and initialization still rely on the caller contract.
  * =========================================================================== */
 
 /**
@@ -901,18 +923,28 @@ int finalize_device(DeviceContextHandle ctx);
  * Callable-registry mutation is rejected while a native run is prepared or
  * executing on this context.
  *
+ * A callable_id that is already registered is rejected with
+ * PTO_RUNTIME_ERR_INVALID_ARGUMENT; unregister the ID before reusing it.
+ *
  * @return 0 on success, negative on error (NULL ctx, callable_id out of
- *         range, upload/copy failure, or AICPU prewarm failure).
+ *         range or already registered, upload/copy failure, or AICPU
+ *         prewarm failure).
  */
 int simpler_register_callable(DeviceContextHandle ctx, int32_t callable_id, const void *callable);
 
 /**
  * Register on an initialized PROGRAM or KERNEL context with an unused ID.
  * KERNEL contexts use the versioned kernel preparation entry. The registry is
- * shared with explicit-ID registration; exhaustion returns INVALID_STATE.
+ * shared with explicit-ID registration, so both draw from the same
+ * MAX_REGISTERED_CALLABLE_IDS (64) slots; exhaustion returns INVALID_STATE.
+ * Registration and unregistration serialize internally on the context, so
+ * concurrent auto-ID and explicit-ID registration cannot claim the same slot.
+ * They do not serialize against runs or close; callers still order those.
+ * An explicit ID that is already registered is rejected with
+ * INVALID_ARGUMENT; auto-ID never returns an occupied slot.
  * Failure leaves *out_callable_id at -1 and cleanup ownership with the runtime.
- * Callers serialize registry mutation against other operations and retire all
- * users before unregistering an ID. An unregistered ID may be reused.
+ * Callers retire all users before unregistering an ID; an unregistered ID may
+ * be reused, and stale IDs must be discarded.
  */
 int simpler_register_callable_v2(
     DeviceContextHandle ctx, const void *callable, size_t callable_size, int32_t *out_callable_id
@@ -1381,9 +1413,10 @@ int simpler_kernel_mode_prepare_callable(
  * Each success owns a distinct ID, even for equal images. Image-buffer sharing
  * follows the runtime's existing cache. IDs may be reused after unregister;
  * callers must retire all users before unregistering and discard stale IDs.
- * Exhaustion returns PTO_RUNTIME_ERR_INVALID_STATE. Serialize registration and
- * unregistration against other operations on this handle, including legacy
- * calls and close. This entry does not add registry-level synchronization.
+ * Exhaustion of the shared 64-slot table returns PTO_RUNTIME_ERR_INVALID_STATE.
+ * Registration and unregistration serialize internally on this handle, so a
+ * concurrent explicit-ID claim cannot take the slot this entry scans; they do
+ * not serialize against runs or close, which callers still order.
  */
 int simpler_kernel_mode_prepare_callable_v2(
     DeviceContextHandle ctx, const void *callable, size_t callable_size, int32_t *out_callable_id

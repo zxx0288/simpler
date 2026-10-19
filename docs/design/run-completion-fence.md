@@ -106,25 +106,34 @@ Native `ChipWorker::register_callable(image, size)` (Python
 initialized PROGRAM or KERNEL worker. PROGRAM uses the optional
 `simpler_register_callable_v2` symbol; KERNEL uses the versioned kernel prepare
 entry. Explicit-ID `register_callable(id, callable)` remains available and
-shares the registry. Older runtimes without the required optional entry reject
-auto-ID registration explicitly. Neither overload initializes the worker.
-The public Python `ChipWorker` wrapper retains its existing CallableHandle API.
+shares the registry; an ID that is already registered is rejected with
+INVALID_ARGUMENT. A runtime without the optional entry can still initialize and
+serve its existing APIs; requesting auto-ID registration raises an explicit
+unsupported-entry error. Neither overload initializes the worker. The public
+Python `ChipWorker` wrapper retains its existing CallableHandle API.
 
 `ChipWorker::prepare_kernel_callable(image, size)` (Python takes a ChipCallable)
 uses the distinct `simpler_kernel_mode_prepare_callable_v2` symbol to allocate
 an unused ID from the runtime's existing registry and share the legacy
-caller-ID preparation path. Both entries share the same ID namespace and image-buffer cache;
-equal images receive distinct IDs, with upload sharing governed by that cache.
-Failure leaves the output ID at -1 and preserves the runtime's existing cleanup
-ownership. ID exhaustion returns INVALID_STATE. IDs can be reused after explicit
-unregistration, so callers retire all users first and discard stale IDs. Registry
-mutation must be serialized against other operations on that handle, including
-legacy calls and close. The entry does not add registry-level synchronization.
-An older runtime without v2 can still initialize and use its existing APIs;
-requesting auto-ID preparation raises an unsupported-entry error. The old C
-symbol's signature and kernel-mode capability bit remain unchanged. Adapters
-must explicitly select v2; an integration-branch binary expecting a different
-signature under the old symbol cannot be loaded as if it were compatible.
+caller-ID preparation path. Both entries share one ID namespace, one
+image-buffer cache and one 64-slot table (`MAX_REGISTERED_CALLABLE_IDS`,
+mirrored by the AICPU executor's `orch_so_table_`); the slot number is the ID.
+Equal images receive distinct IDs, with upload sharing governed by that cache.
+Capacity is a slot count, not a memory budget: with all 64 slots occupied,
+registration fails until an ID is unregistered. Failure leaves the output ID at
+-1 and preserves the runtime's existing cleanup ownership; exhaustion returns
+INVALID_STATE. IDs can be reused after explicit unregistration, so callers
+retire all users first and discard stale IDs. The registration and
+unregistration entry points serialize internally on the context, so an auto-ID
+scan and its claim cannot race an explicit-ID claim of the same slot; finalize
+takes the same lock, so teardown cannot clear the registry under a
+registration. Runs and initialization still rely on the caller contract. An
+older runtime without v2 can still initialize and use its
+existing APIs; requesting auto-ID preparation raises an unsupported-entry
+error. The old C symbol's signature and kernel-mode capability bit remain
+unchanged. Adapters must explicitly select v2; an integration-branch binary
+expecting a different signature under the old symbol cannot be loaded as if it
+were compatible.
 
 The stream is recorded on that run, including a declined join's ordinary-launch
 fallback. Poll/wait/finalize and argument borrows remain the lane's existing
