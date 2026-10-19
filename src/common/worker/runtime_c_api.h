@@ -1416,6 +1416,11 @@ int simpler_kernel_mode_init(
  * synchronizes a caller stream or the device. Preparation neither accepts nor
  * retains a caller stream; the current caller/capture stream is supplied
  * independently to each launch.
+ *
+ * A callable_id that is already registered is rejected with
+ * PTO_RUNTIME_ERR_INVALID_ARGUMENT. Registration is refused with
+ * PTO_RUNTIME_ERR_INTERNAL while a native run is prepared or executing on the
+ * context; retire the run before reusing the registry.
  */
 int simpler_kernel_mode_prepare_callable(
     DeviceContextHandle ctx, int32_t callable_id, const void *callable, size_t callable_size

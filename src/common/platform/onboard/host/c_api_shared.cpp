@@ -1106,6 +1106,13 @@ static int register_callable_auto_id(
             LOG_ERROR("%s: callable registration requires an initialized PROGRAM context", entry);
             return PTO_RUNTIME_ERR_INVALID_STATE;
         }
+        // Check the kernel context before scanning so a full table cannot mask
+        // a non-accepting context as capacity exhaustion. enter_run_thread()
+        // is idempotent; the per-ID helper re-enters for the legacy entry.
+        if (kernel) {
+            rc = enter_kernel_callable_preparation(runner, entry);
+            if (rc != 0) return rc;
+        }
         for (int32_t id = 0; id < MAX_REGISTERED_CALLABLE_IDS; ++id) {
             if (runner->has_callable(id)) continue;
             rc = kernel ? prepare_kernel_callable_locked(runner, id, callable, entry) :
