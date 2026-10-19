@@ -877,7 +877,7 @@ int finalize_device(DeviceContextHandle ctx);
 /* ===========================================================================
  * Per-callable_id preparation
  *
- * The triplet below decouples the one-shot prep work (kernel upload + orch SO
+ * These entries decouple the one-shot prep work (kernel upload + orch SO
  * H2D + caching keyed by `callable_id`) from each `simpler_run` invocation,
  * so the per-run cost shrinks to "rebuild Runtime args + launch". Callers
  * keep a stable small-int `callable_id` per ChipCallable; the platform side
@@ -933,18 +933,33 @@ int simpler_register_callable(DeviceContextHandle ctx, int32_t callable_id, cons
 
 /**
  * Register on an initialized PROGRAM or KERNEL context with an unused ID.
- * KERNEL contexts use the kernel preparation path internally. The registry is
- * shared with explicit-ID registration, so both draw from the same
- * MAX_REGISTERED_CALLABLE_IDS (64) slots; exhaustion returns INVALID_STATE.
+ * KERNEL contexts use the kernel preparation path internally. The entry does
+ * not initialize the context; an uninitialized or unlatched context returns
+ * INVALID_STATE. `callable` points to a canonical ChipCallable image of
+ * exactly `callable_size` bytes, fully validated before it is hashed or
+ * uploaded.
+ *
+ * The registry is shared with explicit-ID registration, so both draw from the
+ * same MAX_REGISTERED_CALLABLE_IDS (64) slots. Each successful call owns a
+ * distinct ID, even for equal images; upload sharing follows the runtime's
+ * existing image cache. Exhaustion returns INVALID_STATE.
+ *
  * Registration and unregistration serialize internally on the context, so
  * concurrent auto-ID and explicit-ID registration cannot claim the same slot.
- * finalize_device takes the same lock; runs, initialization and destroy do
- * not, and callers still order those.
- * An explicit ID that is already registered is rejected with
- * INVALID_ARGUMENT; auto-ID never returns an occupied slot.
- * Failure leaves *out_callable_id at -1 and cleanup ownership with the runtime.
- * Callers retire all users before unregistering an ID; an unregistered ID may
- * be reused, and stale IDs must be discarded.
+ * Registration is refused with PTO_RUNTIME_ERR_INTERNAL while a native run is
+ * prepared or executing on the context. finalize_device takes the same lock;
+ * runs, initialization and destroy do not, and callers still order those.
+ *
+ * Explicit-ID registration rejects an already registered ID with
+ * INVALID_ARGUMENT; auto-ID never returns an occupied slot. IDs may be reused
+ * after unregister, so callers retire all users first and discard stale IDs.
+ *
+ * @return 0 on success, PTO_RUNTIME_ERR_INVALID_ARGUMENT for a null output
+ *         pointer or malformed image, PTO_RUNTIME_ERR_INVALID_STATE for an
+ *         uninitialized/wrong-mode context or exhausted slots, and
+ *         PTO_RUNTIME_ERR_INTERNAL for an outstanding native run or an
+ *         unexpected failure. On failure *out_callable_id is -1 and cleanup
+ *         ownership stays with the runtime.
  */
 int simpler_register_callable_v2(
     DeviceContextHandle ctx, const void *callable, size_t callable_size, int32_t *out_callable_id
