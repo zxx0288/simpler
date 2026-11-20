@@ -20,6 +20,8 @@
 
 #include <runtime/rt.h>
 
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 #include "acl/acl.h"
@@ -426,6 +428,8 @@ int KernelArgsHelper::publish_runtime_args(
         size_t image_section_bytes = 0;
         size_t image_offset = 0;
         const HostMetadataRegion image = launch_metadata_.execution_image();
+        const bool probe_inline = image.bytes != 0 && std::getenv("SIMPLER_PROBE_INLINE_DMA") != nullptr;
+        const size_t probe_bytes = probe_inline ? launch_metadata_.probe_packed_initialization_bytes() : 0;
         if (kernel_route && image.bytes != 0) return PTO_RUNTIME_ERR_INVALID_STATE;
         if (image.bytes != 0) {
             const uint64_t offset = hbg_execution_image_offset(descriptor_end);
@@ -437,6 +441,8 @@ int KernelArgsHelper::publish_runtime_args(
             if (image.reference_count > (UINT32_MAX - package_bytes) / sizeof(HbgImageReference))
                 return PTO_RUNTIME_ERR_INVALID_ARGUMENT;
             package_bytes += image.reference_count * sizeof(HbgImageReference);
+            if (probe_bytes > UINT32_MAX - package_bytes) return PTO_RUNTIME_ERR_INVALID_ARGUMENT;
+            package_bytes += probe_bytes;
             image_section_bytes = package_bytes - image_offset;
             if (image.reference_count != 0)
                 package_bytes = std::max<size_t>(package_bytes, HBG_DIRECT_IMAGE_MIN_PACKET_BYTES);
@@ -463,6 +469,12 @@ int KernelArgsHelper::publish_runtime_args(
                     section + sizeof(binding) + image.bytes, image.image_references,
                     image.reference_count * sizeof(HbgImageReference)
                 );
+            if (probe_bytes != 0) {
+                launch_metadata_.probe_pack_initialization(
+                    section + sizeof(binding) + image.bytes + image.reference_count * sizeof(HbgImageReference)
+                );
+                std::fprintf(stderr, "PROBE_INLINE_DMA payload=%zu packed=%zu\n", launch_metadata_.size(), probe_bytes);
+            }
             std::memset(slot_->launch_package.data() + descriptor_end, 0, image_offset - descriptor_end);
             std::memset(section + image_section_bytes, 0, package_bytes - image_offset - image_section_bytes);
             execution_image_package_ = std::move(slot_->launch_package);
@@ -470,13 +482,14 @@ int KernelArgsHelper::publish_runtime_args(
         }
         args.entry_cache_maintenance = static_cast<uint32_t>(EntryCacheMaintenance::Full);
         runtime_args_state_ = RuntimeArgsState::Empty;
-        const int rc = launch_metadata_.publish(
+        const int rc = probe_inline ? 0 : launch_metadata_.publish(
             slot_->runtime_upload_source, slot_->runtime_upload_bytes,
             [stream, &sink](void *target, const void *metadata, size_t length) {
                 sink.mark_submitted();
                 return rtMemcpyAsync(target, length, metadata, length, RT_MEMCPY_HOST_TO_DEVICE, stream);
             }
         );
+        if (probe_inline) launch_metadata_.clear();
         runtime_image_.clear();
         if (rc != 0) {
             launch_payload_ = nullptr;

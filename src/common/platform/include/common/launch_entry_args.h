@@ -106,6 +106,12 @@ struct HbgExecutionImage {
 static_assert(std::is_trivially_copyable_v<HbgExecutionImage> && std::is_standard_layout_v<HbgExecutionImage>);
 static_assert(sizeof(HbgExecutionImage) == 32 && sizeof(HbgImageReference) == 16);
 
+struct HbgProbeInitialization {
+    uint64_t target;
+    uint64_t bytes;
+};
+static_assert(sizeof(HbgProbeInitialization) == 16);
+
 inline constexpr uint64_t HBG_IMAGE_ALIGNMENT = 64;
 // Direct references require cache-line-aligned data. On ARM RTS pools copies up to
 // 4 KiB at 8-byte alignment; larger packets use a cache-line-aligned allocation.

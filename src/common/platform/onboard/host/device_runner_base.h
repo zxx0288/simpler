@@ -1891,6 +1891,7 @@ public:
     int prepare_caller_submission(void *owner, PreparedExecution &prepared);
     void yield_caller_submission(void *owner, const NativeRunIdentity &identity);
     int finish_caller_submission(ActiveExecution &active);
+    int probe_transfer_caller_submission(PreparedExecution &prepared);
     void release_caller_submission(void *owner) { caller_device_buffers_.release_reference(owner, false); }
     bool caller_diagnostics_supported(const PreparedExecution &prepared) const;
     virtual bool supports_caller_scope_stats() const { return false; }
@@ -3230,8 +3231,11 @@ protected:
     std::vector<std::shared_ptr<PreparedSubmissionStorage>> retired_submission_storage_;
     // Unused generations have no model owner and may be consumed by any slot.
     std::vector<std::shared_ptr<PreparedSubmissionStorage>> spare_submission_storage_;
+    std::array<void *, 5> probe_context_events_{};
+    std::vector<std::shared_ptr<const void>> probe_context_backing_;
+    std::vector<WorkspaceManager::BackingLease> probe_context_workspace_;
     int prepare_spare_submission_storage(void *control_stream);
-    static std::shared_ptr<PreparedSubmissionStorage> make_submission_storage();
+    std::shared_ptr<PreparedSubmissionStorage> make_submission_storage();
     int release_submission_storage(PreparedSubmissionStorage &storage, bool abandon);
 
     /**

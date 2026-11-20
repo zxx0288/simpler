@@ -51,6 +51,7 @@ int main(int argc, char **argv) {
     const bool shared_heap = argc == 7;
     const bool swimlane = argc == 9 && std::strcmp(argv[8], "swimlane") == 0;
     const bool args_dump = argc == 9 && std::strcmp(argv[8], "argsdump") == 0;
+    const bool drop_model_run = std::getenv("SIMPLER_PROBE_DROP_MODEL_RUN") != nullptr;
     const bool execute_models = argc <= 7 || std::atoi(argv[7]) != 0;
     require(!args_dump || std::atoi(argv[7]) == 0 || std::atoi(argv[7]) == 3, "argsdump-replays");
     const int device = std::atoi(argv[1]);
@@ -143,6 +144,12 @@ int main(int argc, char **argv) {
         aclmdlRI model = nullptr;
         check(aclmdlRICaptureBegin(caller, ACL_MODEL_RI_CAPTURE_MODE_GLOBAL), "capture-begin");
         check(simpler_submit_run_on_stream(ctx, run, caller), "capture-launch");
+        if (drop_model_run) {
+            uint64_t storage_tag = 1;
+            std::memcpy(&storage_tag, run, sizeof(storage_tag));
+            require(storage_tag == 0, "host-run-destroyed-before-capture-end");
+            std::memset(run, 0xA5, runtime_size);
+        }
         check(aclmdlRICaptureEnd(caller, &model), "capture-end");
         require(model != nullptr, "captured-model");
         return model;
@@ -168,7 +175,7 @@ int main(int argc, char **argv) {
     const auto model_a = record(runs[0]);
     verify("a-recorded");
     require(simpler_unregister_callable(ctx, 0) == PTO_RUNTIME_ERR_INVALID_STATE, "a-retains-callable");
-    require(finalize_device(ctx) == PTO_RUNTIME_ERR_INVALID_STATE, "a-retains-context");
+    if (!drop_model_run) require(finalize_device(ctx) == PTO_RUNTIME_ERR_INVALID_STATE, "a-retains-context");
     // The plain INOUT scenario grows the execution image before replaying A.
     prepare(1, 1, argc == 6 ? -5 : 5, true);
     verify("b-prepared");
@@ -192,13 +199,16 @@ int main(int argc, char **argv) {
         replay(model_b, 1, 5, "b3");
     }
     check(aclmdlRIDestroy(model_a), "destroy-a");
-    check(simpler_finalize_run(ctx, runs[0]), "release-a");
-    check(simpler_unregister_callable(ctx, 0), "unregister-a");
+    if (!drop_model_run) {
+        check(simpler_finalize_run(ctx, runs[0]), "release-a");
+        check(simpler_unregister_callable(ctx, 0), "unregister-a");
+    }
     require(simpler_unregister_callable(ctx, 1) == PTO_RUNTIME_ERR_INVALID_STATE, "b-retains-callable");
-    require(finalize_device(ctx) == PTO_RUNTIME_ERR_INVALID_STATE, "b-retains-context");
+    if (!drop_model_run) require(finalize_device(ctx) == PTO_RUNTIME_ERR_INVALID_STATE, "b-retains-context");
     auto run_eager = [&] {
         const auto run = runs[2];
-        check(simpler_kernel_mode_prepare_callable(ctx, 0, callable.data(), callable.size()), "register-eager");
+        if (!drop_model_run)
+            check(simpler_kernel_mode_prepare_callable(ctx, 0, callable.data(), callable.size()), "register-eager");
         if (shared_heap) {
             prepare(0, 2, 17, false, PTO_RUNTIME_ERR_INVALID_ARGUMENT);
             verify("heap-capacity-refused");
@@ -245,8 +255,10 @@ int main(int argc, char **argv) {
         replay(model_b, 1, 5, "b-after-a-release");
     }
     check(aclmdlRIDestroy(model_b), "destroy-b");
-    check(simpler_finalize_run(ctx, runs[1]), "release-b");
-    check(simpler_unregister_callable(ctx, 1), "unregister-b");
+    if (!drop_model_run) {
+        check(simpler_finalize_run(ctx, runs[1]), "release-b");
+        check(simpler_unregister_callable(ctx, 1), "unregister-b");
+    }
     if (!swimlane && !args_dump && !shared_heap) run_eager();
     if (pmu || swimlane || args_dump) {
         std::array<char, 4096> error{};
@@ -254,7 +266,7 @@ int main(int argc, char **argv) {
         if (flush_rc != 0) std::fprintf(stderr, "diagnostic flush: %s\n", error.data());
         check(flush_rc, swimlane ? "swimlane-flush" : args_dump ? "argsdump-flush" : "pmu-flush");
     }
-    check(simpler_unregister_callable(ctx, 0), "unregister-eager");
+    if (!drop_model_run) check(simpler_unregister_callable(ctx, 0), "unregister-eager");
     check(finalize_device(ctx), "finalize-context");
     destroy_device_context(ctx);
     for (auto buffer : buffers)

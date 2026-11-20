@@ -998,7 +998,7 @@ private:
         uint64_t run_id, uint64_t dispatch_id, volatile int32_t *accepted_state, int32_t accepted_value,
         bool pipeline_leased, NativeRunProvenance provenance, SimplerPrepareRunFn prepare
     );
-    void submit_native_run_to_caller(const ChipWorkerNativeRun &run, void *caller_stream);
+    bool submit_native_run_to_caller(const ChipWorkerNativeRun &run, void *caller_stream);
     void wait_native_run_completion(const ChipWorkerNativeRun &run);
     void cleanup_native_runs_noexcept() noexcept;
     std::exception_ptr stop_and_cleanup_native_runs();

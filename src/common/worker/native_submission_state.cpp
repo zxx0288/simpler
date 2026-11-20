@@ -12,6 +12,7 @@
 #include "native_submission_state.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <stdexcept>
@@ -92,10 +93,12 @@ struct NativeSubmissionState::Backing {
         caller_stream(caller_stream),
         submission(
             [this](bool framework) {
-                if (registration_claimed) {
+                if (registration_claimed || context_owned) {
                     this->worker->submit_caller_owned_run(
                         this->callable_id, this->values.args(), this->config, this->caller_stream, model_run
                     );
+                    if (context_owned && !model_run.carrier_retired_for_submission())
+                        throw RunPreparationRefused("probe submission did not release its Host run");
                     return model_run;
                 }
                 try {
@@ -134,6 +137,7 @@ struct NativeSubmissionState::Backing {
     CallArgumentSnapshot values;
     const CallConfig config;
     void *const caller_stream;
+    const bool context_owned = std::getenv("SIMPLER_PROBE_DROP_MODEL_RUN") != nullptr;
     bool registration_claimed{false};
     bool operation_in_progress{false};
     // Written by the one submitter and observed after submission settles.
@@ -198,6 +202,7 @@ void NativeSubmissionState::submit() {
 
 void *NativeSubmissionState::active_acl_model() const {
     const auto &state = *backing_;
+    if (state.context_owned) throw RunPreparationRefused("probe reached the ACL capture query");
     state.owner->validate_execution_context();
     const auto query = state.owner->acl_capture_info_fn_;
     if (query == nullptr || state.caller_stream == nullptr)
@@ -392,7 +397,10 @@ void NativeSubmissionState::retire() {
         if (state.registration_claimed &&
             (!run_released() || (state.model_notice && !model_notice_observed(*state.model_notice))))
             throw RunPreparationRefused("cannot retire a model's token before its last use");
+        if (state.context_owned && !run_released())
+            throw RunPreparationRefused("probe cannot retire a live Host run");
         state.submission.retire();
+        if (state.context_owned) state.model_run = {};
         state.owner.reset();
     } catch (...) {
         finish_operation();

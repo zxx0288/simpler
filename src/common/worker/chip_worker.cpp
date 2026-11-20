@@ -1512,7 +1512,7 @@ void ChipWorker::submit_caller_owned_run(
     (void)run_lane_->submit(callable_id, args, config, nullptr, 0, caller_stream, &out, ChipRunOwner::Caller);
 }
 
-void ChipWorker::submit_native_run_to_caller(const ChipWorkerNativeRun &run, void *caller_stream) {
+bool ChipWorker::submit_native_run_to_caller(const ChipWorkerNativeRun &run, void *caller_stream) {
     void *storage = nullptr;
     NativeRunOpLease held;
     const auto lease = acquire_native_run_op(run, NativeRunOp::Launch, &storage, nullptr, &held);
@@ -1521,7 +1521,15 @@ void ChipWorker::submit_native_run_to_caller(const ChipWorkerNativeRun &run, voi
     const int rc = submit_run_on_stream_fn_(device_ctx_, storage, caller_stream);
     if (rc != 0) throw std::runtime_error("caller-stream submission failed with code " + std::to_string(rc));
     std::lock_guard<std::mutex> lock(native_run_mu_);
-    native_runs_.at(run.run_epoch)->phase = NativeRunPhase::CALLER_SUBMITTED;
+    auto entry = native_runs_.find(run.run_epoch);
+    if (read_run_storage_tag(storage) == RunStorageTag::Destroyed) {
+        auto &cache = runtime_bufs_[entry->second->slot_id];
+        if (cache.data() == nullptr) cache = std::move(entry->second->storage);
+        native_runs_.erase(entry);
+        return true;
+    }
+    entry->second->phase = NativeRunPhase::CALLER_SUBMITTED;
+    return false;
 }
 
 std::shared_ptr<NativeSubmissionState> ChipWorker::prepare_chip_submission(

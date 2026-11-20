@@ -104,6 +104,20 @@ public:
     }
 
     size_t size() const { return bytes_; }
+    size_t probe_packed_initialization_bytes() const {
+        return bytes_ + regions_.size() * sizeof(HbgProbeInitialization);
+    }
+    void probe_pack_initialization(std::byte *destination) const {
+        for (const auto &region : regions_) {
+            const HbgProbeInitialization header{
+                reinterpret_cast<uint64_t>(region.target), static_cast<uint64_t>(region.bytes.size())
+            };
+            std::memcpy(destination, &header, sizeof(header));
+            destination += sizeof(header);
+            std::memcpy(destination, region.bytes.data(), region.bytes.size());
+            destination += region.bytes.size();
+        }
+    }
     bool has_execution_image() const { return !execution_image_.bytes.empty(); }
     HostMetadataRegion execution_image() const {
         return {

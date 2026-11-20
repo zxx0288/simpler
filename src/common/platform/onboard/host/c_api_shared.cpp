@@ -2266,6 +2266,18 @@ int simpler_submit_run_on_stream(DeviceContextHandle ctx, RuntimeHandle runtime,
         if (rc == 0) {
             state->runner->yield_caller_submission(state, state->identity());
             state->runner_reserved = state->runner_claimed = false;
+            if (std::getenv("SIMPLER_PROBE_DROP_MODEL_RUN") != nullptr) {
+                if (!state->active_execution || state->active_execution->progress != LaunchProgress::Complete ||
+                    !state->active_execution->prepared)
+                    return PTO_RUNTIME_ERR_INVALID_STATE;
+                rc = state->runner->probe_transfer_caller_submission(*state->active_execution->prepared);
+                if (rc != 0) return rc;
+                rc = release_run_bindings_impl(state->runtime.get(), &state->host_api);
+                if (rc != 0) return rc;
+                state->runner->release_caller_submission(state);
+                state->runner->release_native_run_observation(state);
+                destroy_native_run_context(state);
+            }
         }
         return rc;
     } catch (...) {

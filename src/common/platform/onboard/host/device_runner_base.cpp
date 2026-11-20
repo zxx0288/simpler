@@ -3336,6 +3336,8 @@ int DeviceRunnerBase::finalize_common_impl(bool abandon_device_resources) {
     } else if (prepared_storage_in_use()) {
         return PTO_RUNTIME_ERR_INVALID_STATE;
     }
+    probe_context_backing_.clear();
+    probe_context_workspace_.clear();
     // A failed bind may still hold its selected generation before publication.
     for (auto &bind : scheduler_state_storage_)
         bind = {};
@@ -4286,6 +4288,57 @@ void DeviceRunnerBase::yield_caller_submission(void *owner, const NativeRunIdent
     release_native_run_reservation(owner);
 }
 
+int DeviceRunnerBase::probe_transfer_caller_submission(PreparedExecution &prepared) {
+    if (!prepared.prepared_resources || prepared.dfx.diagnostics_any() ||
+        prepared.kernel_args.args.image_section.bytes == 0 || std::getenv("SIMPLER_PROBE_REUSE_EVENTS") == nullptr ||
+        std::getenv("SIMPLER_PROBE_INLINE_DMA") == nullptr)
+        return PTO_RUNTIME_ERR_UNSUPPORTED;
+
+    const auto &resources = *prepared.prepared_resources;
+    if (!resources.submission_ || (resources.temporary_ && resources.temporary_->base != nullptr))
+        return PTO_RUNTIME_ERR_UNSUPPORTED;
+
+    std::lock_guard<std::mutex> storage_lock(prepared_storage_mutex_);
+    auto use = std::find_if(prepared_uses_.begin(), prepared_uses_.end(), [&](const auto &entry) {
+        return entry.identity == prepared.identity;
+    });
+    if (use == prepared_uses_.end()) return PTO_RUNTIME_ERR_INVALID_STATE;
+
+    auto keep_workspace = [&](const WorkspaceManager::BackingLease &lease) {
+        if (lease && std::find(probe_context_workspace_.begin(), probe_context_workspace_.end(), lease) ==
+                         probe_context_workspace_.end())
+            probe_context_workspace_.push_back(lease);
+    };
+    for (const auto &lease : resources.backing_) keep_workspace(lease);
+    if (resources.heap_lease_.valid()) keep_workspace(workspace_.retain_backing(resources.heap_lease_.raw));
+    if (!workspace_.probe_transfer_to_context(prepared.pipeline_slot, prepared.identity.run_epoch,
+                                              probe_context_workspace_))
+        return PTO_RUNTIME_ERR_INVALID_STATE;
+
+    auto keep = [&](const std::shared_ptr<const void> &resource) {
+        if (resource && std::find(probe_context_backing_.begin(), probe_context_backing_.end(), resource) ==
+                            probe_context_backing_.end())
+            probe_context_backing_.push_back(resource);
+    };
+    keep(resources.scheduler_);
+    keep(resources.callable_);
+    keep(resources.streams_);
+    for (const auto &region : resources.regions_) keep(region);
+    for (const auto &owner : resources.shared_resources_) keep(owner);
+
+    // The slot still owns device args, and the context owns the original events.
+    // Only the per-submission Host records are discarded here.
+    resources.submission_->caller_order->abandon();
+    resources.submission_->fence->abandon();
+    prepared_uses_.erase(use);
+    prepared.resources_owned = false;
+    std::fprintf(stderr, "PROBE_CONTEXT_DROP epoch=%llu shared=%p context_refs=%zu workspace=%zu pending_runs=%zu\n",
+                 static_cast<unsigned long long>(prepared.identity.run_epoch),
+                 static_cast<void *>(resources.submission_->args.shared_state), probe_context_backing_.size(),
+                 probe_context_workspace_.size(), prepared_uses_.size());
+    return 0;
+}
+
 int DeviceRunnerBase::finish_caller_submission(ActiveExecution &active) {
     const auto &prepared = *active.prepared;
     const int rc =
@@ -4677,9 +4730,31 @@ int DeviceRunnerBase::reclaim_prepared_storage() {
 
 std::shared_ptr<PreparedSubmissionStorage> DeviceRunnerBase::make_submission_storage() {
     auto storage = std::make_shared<PreparedSubmissionStorage>();
-    storage->fence = std::make_unique<RunCompletionFence>(make_acl_event_ops());
+    auto make_probe_ops = [this](size_t first, size_t count) {
+        auto ops = make_acl_event_ops();
+        if (std::getenv("SIMPLER_PROBE_REUSE_EVENTS") == nullptr) return ops;
+        ops.create = [this, create = ops.create, first, count, next = size_t{0}](void **out) mutable {
+            const size_t index = first + next;
+            if (probe_context_events_[index] == nullptr) {
+                const int rc = create(&probe_context_events_[index]);
+                if (rc != 0) return rc;
+                std::fprintf(stderr, "PROBE_CONTEXT_EVENT create role=%zu event=%p\n",
+                             index, probe_context_events_[index]);
+            } else {
+                std::fprintf(stderr, "PROBE_CONTEXT_EVENT reuse role=%zu event=%p\n",
+                             index, probe_context_events_[index]);
+            }
+            *out = probe_context_events_[index];
+            next = (next + 1) % count;
+            return 0;
+        };
+        // The device context reclaims the original handles at test teardown.
+        ops.destroy = [](void *) { return 0; };
+        return ops;
+    };
+    storage->fence = std::make_unique<RunCompletionFence>(make_probe_ops(0, 2));
     storage->caller_order = std::make_unique<RunCallerOrder>(
-        make_acl_event_ops(),
+        make_probe_ops(2, 3),
         [](void *stream, void *event) {
             return static_cast<int>(aclrtStreamWaitEvent(stream, event));
         },

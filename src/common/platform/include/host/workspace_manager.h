@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <memory>
 #include <mutex>
 #include <new>
@@ -765,6 +766,26 @@ public:
     using BackingLease = std::shared_ptr<const BackingReference>;
     // Identity without a use obligation, including after an allocation's address is reused.
     using BackingIdentity = std::weak_ptr<const BackingReference>;
+
+    bool probe_transfer_to_context(uint32_t slot, uint64_t epoch, const std::vector<BackingLease> &context) {
+        std::scoped_lock lk(mu_);
+        if (!enabled_) return true;
+        if (slot >= runs_.size() || observation_runs_.find(epoch) == observation_runs_.end()) return false;
+        for (const Block &block : blocks_) {
+            const auto end = block.refs.begin() + block.ref_count;
+            if (std::find(block.refs.begin(), end, epoch) == end) continue;
+            if (!block.prepared_reference ||
+                std::find(context.begin(), context.end(), block.prepared_reference) == context.end()) {
+                std::fprintf(stderr, "probe context does not retain workspace block %p (%zu bytes)\n", block.base,
+                             static_cast<size_t>(block.bytes));
+                return false;
+            }
+        }
+        for (Block &block : blocks_) drop_ref(block, epoch);
+        observation_runs_.erase(epoch);
+        if (runs_[slot].epoch == epoch) runs_[slot] = {};
+        return true;
+    }
 
     BackingLease retain_backing(void *base) {
         std::scoped_lock lk(mu_);

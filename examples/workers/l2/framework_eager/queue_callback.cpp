@@ -96,23 +96,15 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
     });
     py::class_<QueuedNativeCall, std::shared_ptr<QueuedNativeCall>>(module, "QueuedNativeCall")
         .def("check", &QueuedNativeCall::check);
-    module.def("enqueue_native", [](py::capsule capsule, std::vector<at::Tensor> tensors) {
-        // Only the native token's preflight qualifies capture. This public
-        // query selects whether the caller must check host queue dispatch.
-        const bool capturing =
-            py::module_::import("torch_npu.npu.graphs").attr("is_current_stream_capturing")().cast<bool>();
-        std::optional<c10_npu::NPUStream> capture_stream;
-        if (capturing) capture_stream.emplace(c10_npu::getCurrentNPUStream());
+    module.def("enqueue_native_and_confirm", [](py::capsule capsule, std::vector<at::Tensor> tensors) {
+        // The caller explicitly requests CPU queue confirmation on every submission.
+        // Resolving the framework stream drains that queue without device synchronization.
+        auto stream = c10_npu::getCurrentNPUStream();
         auto *api = static_cast<SimplerNativeSubmission *>(
             PyCapsule_GetPointer(capsule.ptr(), SIMPLER_NATIVE_SUBMISSION_CAPSULE)
         );
         if (!api) throw py::error_already_set();
         auto call = std::make_shared<QueuedNativeCall>(*api, std::move(tensors));
-        // A non-zero return is the framework's operator-failure channel: with the
-        // host queue enabled, torch_npu discards every later queued operation and
-        // reports the error at its next synchronization, so no successor reads an
-        // unwritten output. Discarded callbacks never submit; their tickets remain
-        // pending until the producer cancels them.
         auto invoke = [call]() noexcept -> int {
             try {
                 call->submission.submit();
@@ -124,14 +116,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
         };
         py::gil_scoped_release unlocked;
         try {
-            at_npu::native::OpCommand::RunOpApi("SimplerNativeSubmit", invoke, false);
-            if (capture_stream) {
-                // Wait for host dispatch before returning into the graph body.
-                // The original runtime's launch recorded work on the device.
-                if (capture_stream->stream() == nullptr)
-                    throw std::runtime_error("could not drain the capture host queue");
-                call->check();
-            }
+            at_npu::native::OpCommand::RunOpApi("SimplerNativeSubmitAndConfirm", invoke, false);
+            if (stream.stream() == nullptr) throw std::runtime_error("could not drain the framework host queue");
+            call->check();
         } catch (...) {
             if (call->complete.load(std::memory_order_acquire) && call->error) std::rethrow_exception(call->error);
             throw;

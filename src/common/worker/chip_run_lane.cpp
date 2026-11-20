@@ -1692,11 +1692,17 @@ ChipRun ChipRunLane::submit(
         }
         // The original run owns its epoch's buffer references through finalization.
         // A successful enqueue releases the slot, even before device execution.
-        state_->worker->submit_native_run_to_caller(run->native_run, caller_stream);
+        run->native_context_destroyed = state_->worker->submit_native_run_to_caller(run->native_run, caller_stream);
         run->crossed_launch_fence = true;
         run->caller_references_live = false;
         run->device_spans_borrowed = false;
-        run->phase = ChipRunState::Phase::CALLER_SUBMITTED;
+        if (run->native_context_destroyed) {
+            run->phase = ChipRunState::Phase::TERMINAL;
+            state_->erase_from_fifo(run);
+            state_->resource_changed.notify_all();
+        } else {
+            run->phase = ChipRunState::Phase::CALLER_SUBMITTED;
+        }
         return ChipRun(state_, std::move(run));
     }
     if (state_->execution_at(0) == run) {

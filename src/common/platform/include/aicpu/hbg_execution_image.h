@@ -25,13 +25,26 @@ int32_t restore_hbg_execution_image(const void *packet, size_t packet_bytes, Inv
     if (image.working_address == 0 || image.bytes == 0 || image.bytes > packet_bytes - sizeof(image) ||
         image.mutable_prefix_bytes > image.bytes ||
         image.reference_count > (packet_bytes - sizeof(image) - image.bytes) / sizeof(HbgImageReference) ||
-        sizeof(image) + image.bytes + image.reference_count * sizeof(HbgImageReference) != packet_bytes)
+        sizeof(image) + image.bytes + image.reference_count * sizeof(HbgImageReference) > packet_bytes)
         return -1;
     const auto *source = static_cast<const unsigned char *>(packet) + sizeof(image);
     auto *target = reinterpret_cast<void *>(image.working_address);
     // The scheduler passes aligned tensor descriptors to AICore callables.
     if (image.reference_count != 0 && reinterpret_cast<uintptr_t>(source) % HBG_IMAGE_ALIGNMENT != 0) return -1;
     invalidate(source, image.bytes + image.reference_count * sizeof(HbgImageReference));
+    size_t offset = sizeof(image) + image.bytes + image.reference_count * sizeof(HbgImageReference);
+    if (offset < packet_bytes) invalidate(static_cast<const unsigned char *>(packet) + offset, packet_bytes - offset);
+    while (offset < packet_bytes) {
+        if (packet_bytes - offset < sizeof(HbgProbeInitialization)) return -1;
+        HbgProbeInitialization init{};
+        std::memcpy(&init, static_cast<const unsigned char *>(packet) + offset, sizeof(init));
+        offset += sizeof(init);
+        if (init.target == 0 || init.bytes == 0 || init.bytes > packet_bytes - offset) return -1;
+        auto *destination = reinterpret_cast<void *>(init.target);
+        std::memcpy(destination, static_cast<const unsigned char *>(packet) + offset, init.bytes);
+        flush(destination, init.bytes);
+        offset += init.bytes;
+    }
     if (image.mutable_prefix_bytes != 0) {
         std::memcpy(target, source, image.mutable_prefix_bytes);
         flush(target, image.mutable_prefix_bytes);
